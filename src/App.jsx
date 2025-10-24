@@ -401,20 +401,86 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("feed");
   const [exitX, setExitX] = useState(0);
   const [dragX, setDragX] = useState(0);
+  const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
 
   const currentJob = SAMPLE_JOBS[currentJobIndex];
 
+  // Check if running in standalone mode (installed as PWA)
+  const isStandalone =
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true;
+
+  // Capture the install prompt event
+  useEffect(() => {
+    console.log("🔍 Checking install prompt conditions...");
+    console.log("Is standalone:", isStandalone);
+
+    const handler = (e) => {
+      console.log("✅ beforeinstallprompt event fired!");
+      // Prevent the mini-infobar from appearing on mobile
+      e.preventDefault();
+      // Save the event so it can be triggered later
+      setDeferredPrompt(e);
+
+      // Show our custom install prompt after 1 second
+      const hasSeenPrompt = localStorage.getItem("hasSeenInstallPrompt");
+      console.log("Has seen prompt before:", hasSeenPrompt);
+      if (!hasSeenPrompt) {
+        setTimeout(() => {
+          console.log("📱 Showing install prompt...");
+          setShowInstallPrompt(true);
+        }, 1000);
+      }
+    };
+
+    window.addEventListener("beforeinstallprompt", handler);
+
+    // For iOS Safari or if event hasn't fired - show prompt anyway
+    const checkStandalone =
+      window.matchMedia("(display-mode: standalone)").matches ||
+      window.navigator.standalone === true;
+    if (!checkStandalone) {
+      const hasSeenPrompt = localStorage.getItem("hasSeenInstallPrompt");
+      console.log("Not standalone, hasSeenPrompt:", hasSeenPrompt);
+      if (!hasSeenPrompt) {
+        setTimeout(() => {
+          console.log("📱 Showing iOS install prompt...");
+          setShowInstallPrompt(true);
+        }, 1000);
+      }
+    }
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handler);
+    };
+  }, []); // Empty dependency array to run only once
+
   // Prevent browser UI from showing on scroll and pull-to-refresh
   useEffect(() => {
-    // Scroll to hide address bar on mobile
+    // Scroll to hide address bar on mobile - more aggressive approach
     const scrollToHideBar = () => {
+      // Try multiple times to ensure it works
       window.scrollTo(0, 1);
+      setTimeout(() => window.scrollTo(0, 1), 100);
+      setTimeout(() => window.scrollTo(0, 1), 300);
+      setTimeout(() => window.scrollTo(0, 1), 500);
     };
 
     // Run on load and orientation change
     scrollToHideBar();
+
+    // Hide on any user interaction
+    const hideOnInteraction = () => {
+      window.scrollTo(0, 1);
+    };
+
     window.addEventListener("orientationchange", scrollToHideBar);
     window.addEventListener("resize", scrollToHideBar);
+    window.addEventListener("touchstart", hideOnInteraction, {
+      once: true,
+      passive: true,
+    });
 
     // Prevent pull-to-refresh only at the top of scrollable containers
     let lastTouchY = 0;
@@ -465,6 +531,7 @@ export default function App() {
     return () => {
       window.removeEventListener("orientationchange", scrollToHideBar);
       window.removeEventListener("resize", scrollToHideBar);
+      window.removeEventListener("touchstart", hideOnInteraction);
       document.removeEventListener("touchstart", handleTouchStart);
       document.removeEventListener("touchmove", preventPullToRefresh);
     };
@@ -525,8 +592,97 @@ export default function App() {
     setDragX(0);
   };
 
+  const handleInstallClick = async () => {
+    console.log("🎯 Install button clicked");
+    console.log("Deferred prompt available:", !!deferredPrompt);
+
+    if (deferredPrompt) {
+      try {
+        // Show the native install prompt
+        console.log("📱 Showing native install prompt...");
+        deferredPrompt.prompt();
+
+        // Wait for the user to respond to the prompt
+        const { outcome } = await deferredPrompt.userChoice;
+        console.log("User choice:", outcome);
+
+        if (outcome === "accepted") {
+          console.log("✅ User accepted the install prompt");
+          alert("App installed! Look for it on your home screen.");
+        } else {
+          console.log("❌ User dismissed the install prompt");
+        }
+
+        // Clear the deferred prompt
+        setDeferredPrompt(null);
+        setShowInstallPrompt(false);
+        localStorage.setItem("hasSeenInstallPrompt", "true");
+      } catch (error) {
+        console.error("❌ Error during install:", error);
+        alert(
+          "Installation failed. Please try manually: Share → Add to Home Screen"
+        );
+      }
+    } else {
+      // For iOS or if prompt not available - show instructions
+      console.log("ℹ️ No install prompt available (iOS or already installed)");
+      alert(
+        "📱 iOS Installation:\n\n1. Tap the Share button (⬆️)\n2. Scroll and tap 'Add to Home Screen'\n3. Tap 'Add'\n\nYou'll get a fullscreen app!"
+      );
+      dismissInstallPrompt();
+    }
+  };
+
+  const dismissInstallPrompt = () => {
+    setShowInstallPrompt(false);
+    localStorage.setItem("hasSeenInstallPrompt", "true");
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col touch-pan-y">
+    <div className="min-h-screen bg-gray-50 flex flex-col touch-pan-y overflow-hidden">
+      {/* Install Prompt Banner */}
+      {showInstallPrompt && (
+        <div className="fixed top-0 left-0 right-0 bg-green-600 text-white px-4 py-3 z-50 shadow-lg">
+          <div className="max-w-md mx-auto flex items-center justify-between gap-3">
+            <div className="flex-1">
+              <p className="text-sm font-medium">
+                {deferredPrompt
+                  ? "🚀 Install for fullscreen experience!"
+                  : "🍎 Add to Home Screen for fullscreen!"}
+              </p>
+              <p className="text-xs opacity-90">
+                {deferredPrompt
+                  ? "Tap Install to add to your device"
+                  : "Tap Share (⬆️) → Add to Home Screen"}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              {deferredPrompt ? (
+                <button
+                  onClick={handleInstallClick}
+                  className="bg-white text-green-600 hover:bg-green-50 rounded-lg px-4 py-1 text-sm font-bold"
+                >
+                  Install
+                </button>
+              ) : (
+                <button
+                  onClick={handleInstallClick}
+                  className="bg-white text-green-600 hover:bg-green-50 rounded-lg px-3 py-1 text-sm font-bold"
+                >
+                  How?
+                </button>
+              )}
+              <button
+                onClick={dismissInstallPrompt}
+                className="text-white hover:bg-green-700 rounded-lg px-3 py-1 text-sm font-semibold"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header
         className="bg-white border-b border-gray-200 px-4 py-3"
@@ -537,9 +693,15 @@ export default function App() {
             <button className="w-10 h-10 bg-yellow-50 rounded-xl flex items-center justify-center text-xl">
               ⚡
             </button>
-            <button className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-xl border border-gray-200">
-              🎁
-            </button>
+            {!isStandalone && (
+              <button
+                onClick={() => setShowInstallPrompt(true)}
+                className="w-10 h-10 bg-green-50 rounded-xl flex items-center justify-center text-xl border border-green-200"
+                title="Install App"
+              >
+                ⬇️
+              </button>
+            )}
           </div>
           <h1 className="text-2xl font-bold text-green-600">JOB</h1>
           <button className="w-10 h-10 bg-white rounded-xl flex items-center justify-center border border-gray-200">
@@ -562,7 +724,7 @@ export default function App() {
 
       {/* Main Content */}
       <main
-        className="flex-1 overflow-y-auto overflow-x-hidden pb-20"
+        className="flex-1 overflow-y-auto overflow-x-hidden pb-20 relative"
         style={{ WebkitOverflowScrolling: "touch" }}
       >
         <div className="max-w-md mx-auto px-4 py-6">
